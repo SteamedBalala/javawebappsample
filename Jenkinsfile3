@@ -1,57 +1,66 @@
 pipeline {
   agent any
+
+  tools { maven 'Maven3' }  // 需要在 Manage Jenkins -> Tools 里配置这个名字
+
   environment {
-    RESOURCE_GROUP       = 'jenkins-get-started-rg'
-    WEBAPP_NAME          = 'jenkins-7618-app'
-    AZ_SUBSCRIPTION_ID   = '7a61a9c1-12a4-4245-8d3f-5a4b323b3e37'
-    AZ_TENANT_ID         = '<YOUR_TENANT_ID>'
+    RG              = 'jenkins-get-started-rg'
+    WEBAPP_NAME     = 'jenkins-7618-app'
+    SUBSCRIPTION_ID = '7a61a9c1-12a4-4245-8d3f-5a4b323b3e37'
+    TENANT_ID       = '<在这里填你的 Tenant ID>'
   }
+
   stages {
     stage('Checkout') {
       steps { checkout scm }
     }
-    stage('Build WAR') {
+
+    stage('Build') {
       steps {
-        sh 'mvn -B -DskipTests package'
-        sh 'ls -l target/*.war'
+        sh 'mvn -B -DskipTests clean package'
       }
     }
-    stage('Azure Login') {
+
+    stage('Login Azure') {
       steps {
-        withCredentials([usernamePassword(
-          credentialsId: 'AzureServicePrincipal',
-          usernameVariable: 'AZ_SP_APPID',
-          passwordVariable: 'AZ_SP_PASSWORD')]) {
+        withCredentials([usernamePassword(credentialsId: 'AzureServicePrincipal', usernameVariable: 'APP_ID', passwordVariable: 'APP_SECRET')]) {
           sh '''
-            az account show >/dev/null 2>&1 || true
+            set -eux
             az logout || true
-            az login --service-principal -u "$AZ_SP_APPID" -p "$AZ_SP_PASSWORD" --tenant "$AZ_TENANT_ID"
-            az account set --subscription "$AZ_SUBSCRIPTION_ID"
-            az account show
+            az login --service-principal -u "$APP_ID" -p "$APP_SECRET" --tenant "$TENANT_ID"
+            az account set --subscription "$SUBSCRIPTION_ID"
           '''
         }
       }
     }
-    stage('Configure Runtime (once)') {
+
+    stage('Deploy to Azure Web App') {
       steps {
         sh '''
-          az webapp config set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
-            --java-version 11 --java-container Tomcat --java-container-version 9.0
+          set -eux
+          ARTIFACT=$(ls target/*.war 2>/dev/null | head -n1 || true)
+          if [ -n "$ARTIFACT" ]; then
+            az webapp deploy -g "$RG" -n "$WEBAPP_NAME" --type war --src-path "$ARTIFACT"
+          else
+            ARTIFACT=$(ls target/*.jar 2>/dev/null | head -n1 || true)
+            if [ -n "$ARTIFACT" ]; then
+              az webapp deploy -g "$RG" -n "$WEBAPP_NAME" --type jar --src-path "$ARTIFACT"
+            else
+              echo "No build artifact found under target/"; exit 1
+            fi
+          fi
         '''
       }
     }
-    stage('Deploy WAR') {
+
+    stage('Smoke Test') {
       steps {
         sh '''
-          ARTIFACT=$(ls target/*.war | head -n1)
-          az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
-            --type war --src-path "$ARTIFACT"
+          set -eux
+          curl -fsS "https://${WEBAPP_NAME}.azurewebsites.net/api/calculator/ping" -i | sed -n '1,10p'
+          curl -fsS "https://${WEBAPP_NAME}.azurewebsites.net/api/calculator/add?x=23&y=33" -i | sed -n '1,10p'
         '''
       }
     }
-  }
-  post {
-    success { echo "Deployment to $WEBAPP_NAME succeeded." }
-    failure { echo "Build/Deploy failed. Check console output." }
   }
 }
