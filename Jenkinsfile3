@@ -4,10 +4,10 @@ pipeline {
   tools { maven 'Maven3' }  // 需要在 Manage Jenkins -> Tools 里配置这个名字
 
   environment {
-    RG              = 'jenkins-get-started-rg'
-    WEBAPP_NAME     = 'jenkins-7618-app'
-    SUBSCRIPTION_ID = '7a61a9c1-12a4-4245-8d3f-5a4b323b3e37'
-    TENANT_ID       = '<在这里填你的 Tenant ID>'
+  RG              = 'jenkins-get-started-rg'
+  WEBAPP_NAME     = 'jenkins-7618-app'
+  SUBSCRIPTION_ID = '7a61a9c1-12a4-4245-8d3f-5a4b323b3e37'
+  TENANT_ID       = '44456012-0348-4d8c-93d8-cbedce1d91d9' 
   }
 
   stages {
