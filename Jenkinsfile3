@@ -1,0 +1,57 @@
+pipeline {
+  agent any
+  environment {
+    RESOURCE_GROUP       = 'jenkins-get-started-rg'
+    WEBAPP_NAME          = 'jenkins-7618-app'
+    AZ_SUBSCRIPTION_ID   = '7a61a9c1-12a4-4245-8d3f-5a4b323b3e37'
+    AZ_TENANT_ID         = '<YOUR_TENANT_ID>'
+  }
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+    stage('Build WAR') {
+      steps {
+        sh 'mvn -B -DskipTests package'
+        sh 'ls -l target/*.war'
+      }
+    }
+    stage('Azure Login') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'AzureServicePrincipal',
+          usernameVariable: 'AZ_SP_APPID',
+          passwordVariable: 'AZ_SP_PASSWORD')]) {
+          sh '''
+            az account show >/dev/null 2>&1 || true
+            az logout || true
+            az login --service-principal -u "$AZ_SP_APPID" -p "$AZ_SP_PASSWORD" --tenant "$AZ_TENANT_ID"
+            az account set --subscription "$AZ_SUBSCRIPTION_ID"
+            az account show
+          '''
+        }
+      }
+    }
+    stage('Configure Runtime (once)') {
+      steps {
+        sh '''
+          az webapp config set -g "$RESOURCE_GROUP" -n "$WEBAPP_NAME" \
+            --java-version 11 --java-container Tomcat --java-container-version 9.0
+        '''
+      }
+    }
+    stage('Deploy WAR') {
+      steps {
+        sh '''
+          ARTIFACT=$(ls target/*.war | head -n1)
+          az webapp deploy --resource-group "$RESOURCE_GROUP" --name "$WEBAPP_NAME" \
+            --type war --src-path "$ARTIFACT"
+        '''
+      }
+    }
+  }
+  post {
+    success { echo "Deployment to $WEBAPP_NAME succeeded." }
+    failure { echo "Build/Deploy failed. Check console output." }
+  }
+}
