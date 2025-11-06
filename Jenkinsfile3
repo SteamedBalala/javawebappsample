@@ -1,8 +1,7 @@
 pipeline {
   agent any
 
-  // 先在 Manage Jenkins -> Tools 里配置一个名为 Maven3 的 Maven
-  tools { maven 'Maven3' }
+  tools { maven 'Maven3' } // 在 Manage Jenkins -> Tools 里名字必须叫 Maven3
 
   environment {
     RG              = 'jenkins-get-started-rg'
@@ -13,22 +12,28 @@ pipeline {
 
   options {
     timestamps()
+    disableConcurrentBuilds()
   }
 
   stages {
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
     }
 
     stage('Build') {
       steps {
         sh '''
+          set -e
           mvn -v
           mvn -B -DskipTests clean package
         '''
       }
       post {
-        success { archiveArtifacts artifacts: 'target/*.war', fingerprint: true }
+        success {
+          archiveArtifacts artifacts: 'target/*.war', fingerprint: true
+        }
       }
     }
 
@@ -39,7 +44,6 @@ pipeline {
           usernameVariable: 'APP_ID',
           passwordVariable: 'APP_SECRET'
         )]) {
-          // 注意：不要用 set -x，避免在日志中打印出敏感信息
           sh '''
             set -e
             az logout || true
@@ -57,7 +61,6 @@ pipeline {
         sh '''
           set -e
           WAR=$(ls -1 target/*.war | head -n1)
-          # 将 WAR 部署到 Linux Tomcat (Java 11)，目标命名为 ROOT.war
           az webapp deploy \
             --resource-group "$RG" \
             --name "$WEBAPP_NAME" \
@@ -73,7 +76,7 @@ pipeline {
       steps {
         sh '''
           set -e
-          # 最多等 ~100 秒让冷启动完成
+          # 等待冷启动，最多约 100s
           for i in $(seq 1 20); do
             code=$(curl -s -o /dev/null -w "%{http_code}" "https://${WEBAPP_NAME}.azurewebsites.net/api/calculator/ping" || true)
             [ "$code" = "200" ] && break
@@ -94,7 +97,5 @@ pipeline {
     always {
       sh 'az logout || true'
     }
-  }
-}
   }
 }
