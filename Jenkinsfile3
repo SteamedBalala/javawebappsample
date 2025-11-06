@@ -1,13 +1,18 @@
 pipeline {
   agent any
 
-  tools { maven 'Maven3' }  // 需要在 Manage Jenkins -> Tools 里配置这个名字
+  // 先在 Manage Jenkins -> Tools 里配置一个名为 Maven3 的 Maven
+  tools { maven 'Maven3' }
 
   environment {
-  RG              = 'jenkins-get-started-rg'
-  WEBAPP_NAME     = 'jenkins-7618-app'
-  SUBSCRIPTION_ID = '7a61a9c1-12a4-4245-8d3f-5a4b323b3e37'
-  TENANT_ID       = '44456012-0348-4d8c-93d8-cbedce1d91d9' 
+    RG              = 'jenkins-get-started-rg'
+    WEBAPP_NAME     = 'jenkins-7618-app'
+    SUBSCRIPTION_ID = '7a61a9c1-12a4-4245-8d3f-5a4b323b3e37'
+    TENANT_ID       = '44456012-0348-4d8c-93d8-cbedce1d91d9'
+  }
+
+  options {
+    timestamps()
   }
 
   stages {
@@ -17,18 +22,31 @@ pipeline {
 
     stage('Build') {
       steps {
-        sh 'mvn -B -DskipTests clean package'
+        sh '''
+          mvn -v
+          mvn -B -DskipTests clean package
+        '''
+      }
+      post {
+        success { archiveArtifacts artifacts: 'target/*.war', fingerprint: true }
       }
     }
 
     stage('Login Azure') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'AzureServicePrincipal', usernameVariable: 'APP_ID', passwordVariable: 'APP_SECRET')]) {
+        withCredentials([usernamePassword(
+          credentialsId: 'AzureServicePrincipal',
+          usernameVariable: 'APP_ID',
+          passwordVariable: 'APP_SECRET'
+        )]) {
+          // 注意：不要用 set -x，避免在日志中打印出敏感信息
           sh '''
-            set -eux
+            set -e
             az logout || true
+            az cloud set -n AzureCloud
             az login --service-principal -u "$APP_ID" -p "$APP_SECRET" --tenant "$TENANT_ID"
             az account set --subscription "$SUBSCRIPTION_ID"
+            az webapp show -g "$RG" -n "$WEBAPP_NAME" --query name -o tsv
           '''
         }
       }
@@ -37,18 +55,16 @@ pipeline {
     stage('Deploy to Azure Web App') {
       steps {
         sh '''
-          set -eux
-          ARTIFACT=$(ls target/*.war 2>/dev/null | head -n1 || true)
-          if [ -n "$ARTIFACT" ]; then
-            az webapp deploy -g "$RG" -n "$WEBAPP_NAME" --type war --src-path "$ARTIFACT"
-          else
-            ARTIFACT=$(ls target/*.jar 2>/dev/null | head -n1 || true)
-            if [ -n "$ARTIFACT" ]; then
-              az webapp deploy -g "$RG" -n "$WEBAPP_NAME" --type jar --src-path "$ARTIFACT"
-            else
-              echo "No build artifact found under target/"; exit 1
-            fi
-          fi
+          set -e
+          WAR=$(ls -1 target/*.war | head -n1)
+          # 将 WAR 部署到 Linux Tomcat (Java 11)，目标命名为 ROOT.war
+          az webapp deploy \
+            --resource-group "$RG" \
+            --name "$WEBAPP_NAME" \
+            --src-path "$WAR" \
+            --type war \
+            --target-path ROOT.war \
+            --clean true
         '''
       }
     }
@@ -56,11 +72,29 @@ pipeline {
     stage('Smoke Test') {
       steps {
         sh '''
-          set -eux
-          curl -fsS "https://${WEBAPP_NAME}.azurewebsites.net/api/calculator/ping" -i | sed -n '1,10p'
-          curl -fsS "https://${WEBAPP_NAME}.azurewebsites.net/api/calculator/add?x=23&y=33" -i | sed -n '1,10p'
+          set -e
+          # 最多等 ~100 秒让冷启动完成
+          for i in $(seq 1 20); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "https://${WEBAPP_NAME}.azurewebsites.net/api/calculator/ping" || true)
+            [ "$code" = "200" ] && break
+            sleep 5
+          done
+
+          echo "---- /ping ----"
+          curl -i "https://${WEBAPP_NAME}.azurewebsites.net/api/calculator/ping"
+
+          echo "---- /add ----"
+          curl -i "https://${WEBAPP_NAME}.azurewebsites.net/api/calculator/add?x=23&y=33"
         '''
       }
     }
+  }
+
+  post {
+    always {
+      sh 'az logout || true'
+    }
+  }
+}
   }
 }
